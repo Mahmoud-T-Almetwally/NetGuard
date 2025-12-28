@@ -1,125 +1,127 @@
 package repository
 
 import (
-	"log"
 	"database/sql"
+	"fmt"
+	"log"
+	"time"
+	_ "github.com/mattn/go-sqlite3" 
 )
 
-type DomainDB struct {
-	db* sql.DB
-}
-
 type BlockedDomain struct {
-	domain string
-	action string
-	source string
+	Domain string
+	Action string
+	Source string
 }
 
-func (d* DomainDB) InitDB(s string){
-	db, err := sql.Open("sqlite", s)
+type DomainDB struct {
+	db *sql.DB
+}
 
+func (d *DomainDB) InitDB(path string) error {
+	db, err := sql.Open("sqlite3", path) 
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("could not open db: %v", err)
 	}
-
-	log.Println("Connected to DB Successfully")
 
 	d.db = db
 
+	_, _ = d.db.Exec("PRAGMA journal_mode=WAL;")
+
 	q := `
-CREATE TABLE IF NOT EXISTS rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    domain TEXT UNIQUE NOT NULL,
-    source TEXT,           -- 'stevenblack', 'user_manual', 'ai_auto_ban'
-    action TEXT,           -- 'BLOCK', 'ALLOW'
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    domain TEXT,
-    blocked_by TEXT,       -- 'database', 'ai_domain', 'content_scan'
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+	CREATE TABLE IF NOT EXISTS rules (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		domain TEXT UNIQUE NOT NULL,
+		source TEXT,
+		action TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at INTEGER
+	);
+	
+	CREATE INDEX IF NOT EXISTS idx_domain ON rules(domain);
+	
+	CREATE TABLE IF NOT EXISTS metadata (
+		key TEXT PRIMARY KEY, 
+		value TEXT
+	);
 	`
-
 	if _, err = d.db.Exec(q); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("could not init tables: %v", err)
 	}
 
-	log.Println("Initialized Tables Successfully")
+	return nil
 }
 
-func (d* DomainDB) GetAll() []string {
+func (d *DomainDB) GetETag(source string) string {
+	var val string
+	_ = d.db.QueryRow("SELECT value FROM metadata WHERE key = ?", source+"_etag").Scan(&val)
+	return val
+}
 
-	if err := d.db.Ping(); err != nil {
-		log.Fatal(err)
-	}
+func (d *DomainDB) UpdateETag(source, etag string) error {
+	_, err := d.db.Exec("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)", source+"_etag", etag)
+	return err
+}
 
-	q := `
-SELECT domain FROM rules;
-	`
-
-	rows, err := d.db.Query(q)
-
+func (d *DomainDB) StreamSync(dataStream <-chan BlockedDomain, source string) (int, error) {
+	tx, err := d.db.Begin()
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
 
-	domains := []string{}
+	defer tx.Rollback()
+	importTime := time.Now().Unix()
 
+    query := `
+    INSERT INTO rules (domain, source, action, updated_at) 
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(domain) DO UPDATE SET 
+        updated_at = excluded.updated_at,
+        source = excluded.source;
+    `
+    stmt, err := tx.Prepare(query)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	count := 0
+	
+	for item := range dataStream {
+		if _, err := stmt.Exec(item.Domain, source, item.Action, importTime); err != nil {
+			log.Printf("Failed to insert %s: %v", item.Domain, err)
+			continue
+		}
+		count++
+	}
+
+	pruneQuery := `DELETE FROM rules WHERE source = ? AND updated_at != ?`
+    if _, err := tx.Exec(pruneQuery, source, importTime); err != nil {
+        return 0, err
+    }
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	log.Printf("Successfully streamed and inserted %d domains.", count)
+	return count, nil
+}
+
+func (d *DomainDB) GetAll() ([]string, error) {
+	rows, err := d.db.Query("SELECT domain FROM rules")
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 
+	var domains []string
 	for rows.Next() {
 		var domain string
 		if err := rows.Scan(&domain); err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
-
 		domains = append(domains, domain)
-
 	}
-
-	if err := rows.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	return domains
-
-}
-
-func (d* DomainDB) Insert(domain BlockedDomain) {
-
-	if err := d.db.Ping(); err != nil {
-		log.Fatal(err)
-	}
-
-	sql := `
-INSERT INTO rules(domain, source, action) VALUES (?, ?, ?);
-	`
-
-	if _, err := d.db.Exec(sql, domain.domain, domain.source, domain.action); err != nil {
-		log.Fatal(err)
-	}
-
-	log.Println(domain.action, " Domain: ", domain.domain, " Source: ", domain.source)
-}
-
-func (d* DomainDB) BulkInsert(domains []BlockedDomain) {
-
-	if err := d.db.Ping(); err != nil {
-		log.Fatal(err)
-	}
-
-	sql := `
-INSERT INTO rules(domain, source, action) VALUES (?, ?, ?);
-	`
-
-	for _, domain := range domains {
-		_, err := d.db.Exec(sql, domain.domain, domain.source, domain.action)
-		if err != nil{
-			log.Fatal(err)
-		}
-	}
-
+	return domains, nil
 }
