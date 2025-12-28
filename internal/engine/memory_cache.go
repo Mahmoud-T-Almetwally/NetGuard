@@ -67,44 +67,43 @@ func (t *DomainTrie) BulkInsert(domains []string) {
 // ShouldBlock checks if a domain (or its parent) is blocked.
 // Returns true if blocked.
 func (t *DomainTrie) ShouldBlock(domain string) bool {
-	t.lock.RLock() // Read Lock: Multiple threads can read at the same time
+	t.lock.RLock()
 	defer t.lock.RUnlock()
 
 	node := t.root
 	
-	// Iterate backwards
+	// Iterate backwards through the input domain
 	for i := len(domain) - 1; i >= 0; i-- {
 		char := domain[i]
 
-		// 1. Check if the current node marks a blocked parent domain
-		// This handles the wildcard logic. 
-		// Example: We blocked "google.com". Input is "ads.google.com".
-		// We traversed "moc.elgoog". node.isEnd is True here.
-		// We must ensure the next char is a dot '.' or we are at the end, 
-		// otherwise we might accidentally block "google.com.ph" (if we only blocked google.com) 
-		// or "notgoogle.com".
-		if node.isEnd {
-			// If we hit an 'end' node, and the character we just processed was a dot,
-			// or if we are at the very start of the traversal, it's a subdomain match.
-			// However, in reverse traversal, simple isEnd checks are usually sufficient 
-			// if we enforce explicit structure.
-			
-			// A simpler check for "subdomain or exact match":
-			// If we are at "google.com" (reversed), and the previous char read was '.'
-			// then it is a match.
-			if i+1 < len(domain) && domain[i+1] == '.' {
-				return true
-			}
+		// --- THE FIX IS HERE ---
+		// We are standing on a node. If this node marks the end of a blocked domain
+		// (e.g., we just finished matching "google.com"), AND the character we are 
+		// about to process is a dot '.', it means the input is a subdomain.
+		// Example: Input "ads.google.com"
+		// 1. We matched "moc.elgoog". Node is at 'g' (isEnd=true).
+		// 2. The loop variable 'char' is now the dot '.' at index 3.
+		// 3. Since node.isEnd is true AND char is '.', we return true.
+		if node.isEnd && char == '.' {
+			return true
 		}
 
 		next, exists := node.children[char]
 		if !exists {
+			// Path ends. 
+			// Example: Input "notgoogle.com". 
+			// We matched "google.com" (node.isEnd=true).
+			// Next char is 't'. It is NOT a dot (so checks above failed).
+			// 't' does not exist as a child of the 'g' node.
+			// Result: Not blocked.
 			return false
 		}
 		node = next
 	}
 
-	// Exact match check (e.g. input was exactly "google.com")
+	// Exact match check
+	// This handles the case where input is exactly "google.com".
+	// The loop finishes, and we are standing on the last 'g', which isEnd=true.
 	return node.isEnd
 }
 
