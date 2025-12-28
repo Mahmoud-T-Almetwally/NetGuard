@@ -1,14 +1,14 @@
 package updater
 
 import (
-	"netguard/internal/repository"
 	"log"
 	"net/http"
+	"netguard/internal/repository"
 )
 
 const StevenBlackURL = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
 
-func SmartUpdate(db *repository.DomainDB) {
+func Update(db *repository.DomainDB) {
 	log.Println("Checking for blocklist updates...")
 
 	// 1. Get current version from DB
@@ -43,7 +43,7 @@ func SmartUpdate(db *repository.DomainDB) {
 	newETag := resp.Header.Get("ETag")
 
 	domainChan := make(chan repository.BlockedDomain, 2000)
-	
+
 	doneChan := make(chan int)
 
 	go func() {
