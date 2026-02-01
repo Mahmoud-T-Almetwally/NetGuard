@@ -1,0 +1,241 @@
+import asyncio
+import os
+import requests
+import hashlib
+import tempfile
+import csv
+import logging
+from urllib.parse import urlparse
+from playwright.async_api import async_playwright
+
+# Configuration
+MALWARE_FEED = "https://urlhaus.abuse.ch/downloads/csv_recent/"
+ADWARE_FEED = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
+BENIGN_FEED = "./data/top-1m.csv" 
+OUTPUT_DIR = "./data"
+METADATA_FILE = os.path.join(OUTPUT_DIR, "dataset_metadata.csv") # <--- NEW METADATA FILE
+MAX_SAMPLES = 2000
+TIMEOUT_SECONDS = 15
+
+BLOCKED_EXTENSIONS = [
+    ".exe", ".zip", ".rar", ".7z", ".tar", ".gz", ".iso", ".dmg", ".pkg", 
+    ".apk", ".msi", ".bin", ".bat", ".cmd", ".sh", ".js" 
+]
+BLOCKED_RESOURCES = ["image", "media", "font", "other"]
+
+def setup_logger():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+
+logger = logging.getLogger(__name__)
+
+async def intercept_route(route, request):
+    url = request.url.lower()
+    resource_type = request.resource_type
+    if resource_type in BLOCKED_RESOURCES:
+        await route.abort()
+        return
+    if any(url.endswith(ext) for ext in BLOCKED_EXTENSIONS):
+        await route.abort()
+        return
+    try:
+        await route.continue_()
+    except Exception:
+        pass
+
+async def fetch_html_task(context, url, label):
+    """
+    Fetches URL, saves HTML, and returns URL Metadata.
+    """
+    page = None
+    try:
+        # 1. Parse URL Features BEFORE navigation
+        parsed = urlparse(url)
+        file_hash = hashlib.md5(url.encode()).hexdigest()
+        
+        # Prepare Metadata Dict
+        meta_data = {
+            "file_hash": file_hash,
+            "original_url": url,
+            "protocol": parsed.scheme,        # http or https
+            "domain": parsed.netloc,          # example.com
+            "path": parsed.path,              # /login.php
+            "query": parsed.query,            # ?id=123
+            "label": label
+        }
+
+        page = await context.new_page()
+        page.on("download", lambda download: download.cancel())
+        await page.route("**/*", intercept_route)
+
+        response = await page.goto(url, timeout=TIMEOUT_SECONDS * 1000, wait_until="domcontentloaded")
+
+        if not response or response.status != 200:
+            logger.warning(f"[SKIP] {label}: {url} - Status {response.status if response else 'Err'}")
+            return None # Return None on failure
+
+        try:
+            await page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+
+        content = await page.content()
+        
+        # Save HTML
+        save_path = os.path.join(OUTPUT_DIR, label, f"{file_hash}.html")
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno()) 
+            
+        logger.info(f"[SUCCESS] {label}: {url}")
+        
+        # Return the metadata on success
+        return meta_data
+
+    except Exception as e:
+        error_msg = str(e).split('\n')[0][:50]
+        logger.error(f"[FAIL] {label}: {url} - {error_msg}")
+        return None
+    finally:
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+async def safe_fetch_wrapper(context, url, label):
+    try:
+        # Wait for the result of the fetch
+        return await asyncio.wait_for(fetch_html_task(context, url, label), timeout=TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.error(f"[TIMEOUT] {label}: {url}")
+        return None
+    except Exception as e:
+        logger.error(f"[ERROR] Wrapper caught: {e}")
+        return None
+
+def download_feed_to_temp(url):
+    # ... (Keep existing download logic) ...
+    logger.info(f"Downloading feed from: {url}...")
+    try:
+        r = requests.get(url, stream=True, timeout=30)
+        r.raise_for_status()
+        tf = tempfile.NamedTemporaryFile(delete=False, mode='wb')
+        for chunk in r.iter_content(chunk_size=8192):
+            tf.write(chunk)
+        tf.close()
+        return tf.name
+    except Exception as e:
+        logger.error(f"Error downloading feed {url}: {e}")
+        return None
+
+async def main():
+    setup_logger()
+    
+    for category in ["malware", "adware", "benign"]:
+        os.makedirs(os.path.join(OUTPUT_DIR, category), exist_ok=True)
+
+    # Initialize Metadata CSV
+    csv_headers = ["file_hash", "original_url", "protocol", "domain", "path", "query", "label"]
+    
+    # Check if file exists to avoid overwriting headers if running multiple times (optional)
+    write_headers = not os.path.exists(METADATA_FILE)
+    
+    # Open CSV in append mode, but we will write in batches
+    csv_file = open(METADATA_FILE, mode='a', newline='', encoding='utf-8')
+    csv_writer = csv.DictWriter(csv_file, fieldnames=csv_headers)
+    if write_headers:
+        csv_writer.writeheader()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            ignore_https_errors=True,
+            accept_downloads=False
+        )
+
+        all_tasks = []
+
+        # --- 1. MALWARE ---
+        malware_temp_path = download_feed_to_temp(MALWARE_FEED)
+        if malware_temp_path:
+            logger.info("Parsing Malware Feed...")
+            count = 0
+            with open(malware_temp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if line.startswith("#") or line.strip() == "": continue
+                    parts = line.split('","') 
+                    if len(parts) > 2:
+                        url = parts[2].replace('"', '')
+                        if url.startswith("http"):
+                            all_tasks.append(safe_fetch_wrapper(context, url, "malware"))
+                            count += 1
+                            if count >= MAX_SAMPLES: break
+            os.remove(malware_temp_path)
+
+        # --- 2. ADWARE ---
+        adware_temp_path = download_feed_to_temp(ADWARE_FEED)
+        if adware_temp_path:
+            logger.info("Parsing Adware Feed...")
+            count = 0
+            with open(adware_temp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("#") or line == "": continue
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == "0.0.0.0":
+                        domain = parts[1]
+                        if domain == "0.0.0.0": continue
+                        url = f"http://{domain}"
+                        all_tasks.append(safe_fetch_wrapper(context, url, "adware"))
+                        count += 1
+                        if count >= MAX_SAMPLES: break
+            os.remove(adware_temp_path)
+
+        # --- 3. BENIGN ---
+        logger.info("Parsing Benign List...")
+        if os.path.exists(BENIGN_FEED):
+            count = 0
+            with open(BENIGN_FEED, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) >= 2:
+                        domain = row[1]
+                        url = f"https://{domain}"
+                        all_tasks.append(safe_fetch_wrapper(context, url, "benign"))
+                        count += 1
+                        if count >= MAX_SAMPLES: break
+
+        # --- EXECUTION ---
+        logger.info(f"Starting collection of {len(all_tasks)} URLs...")
+        
+        batch_size = 10
+        for i in range(0, len(all_tasks), batch_size):
+            batch = all_tasks[i:i+batch_size]
+            
+            # Run batch
+            results = await asyncio.gather(*batch)
+            
+            # Process Results immediately to CSV
+            success_count = 0
+            for res in results:
+                if res: # If not None (success)
+                    csv_writer.writerow(res)
+                    success_count += 1
+            
+            # Flush to disk to ensure data is saved even if script crashes
+            csv_file.flush()
+            
+            logger.info(f"Batch {i//batch_size + 1}: Saved {success_count} entries to metadata.")
+
+        await browser.close()
+        csv_file.close()
+        logger.info("Scraping Run Complete.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
