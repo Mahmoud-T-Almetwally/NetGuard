@@ -41,8 +41,8 @@ func TestStreamSync(t *testing.T) {
 	}
 
 	// Check total rows in DB
-	rows, _ := db.GetAll()
-	
+	rows, _ := db.GetBlocklist()
+
 	// Convert slice to map for easy checking
 	lookup := make(map[string]bool)
 	for _, r := range rows {

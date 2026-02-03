@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"log"
 	"time"
-	_ "github.com/mattn/go-sqlite3" 
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type BlockedDomain struct {
@@ -19,7 +20,7 @@ type DomainDB struct {
 }
 
 func (d *DomainDB) InitDB(path string) error {
-	db, err := sql.Open("sqlite3", path) 
+	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return fmt.Errorf("could not open db: %v", err)
 	}
@@ -63,6 +64,41 @@ func (d *DomainDB) UpdateETag(source, etag string) error {
 	return err
 }
 
+func (d *DomainDB) SyncUserRules(whitelist []string, blacklist []string) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Helper to insert
+	upsert := func(domain, action string) error {
+		// We use source='user_manual' so we can protect these rows later
+		query := `
+		INSERT INTO rules (domain, source, action, batch_id) VALUES (?, 'user_manual', ?, 0)
+		ON CONFLICT(domain) DO UPDATE SET 
+			source = 'user_manual', 
+			action = excluded.action;
+		`
+		_, err := tx.Exec(query, domain, action)
+		return err
+	}
+
+	for _, domain := range blacklist {
+		if err := upsert(domain, "BLOCK"); err != nil {
+			return err
+		}
+	}
+
+	for _, domain := range whitelist {
+		if err := upsert(domain, "ALLOW"); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 func (d *DomainDB) StreamSync(dataStream <-chan BlockedDomain, source string) (int, error) {
 	tx, err := d.db.Begin()
 	if err != nil {
@@ -72,21 +108,21 @@ func (d *DomainDB) StreamSync(dataStream <-chan BlockedDomain, source string) (i
 	defer tx.Rollback()
 	importTime := time.Now().Unix()
 
-    query := `
+	query := `
     INSERT INTO rules (domain, source, action, updated_at) 
     VALUES (?, ?, ?, ?)
     ON CONFLICT(domain) DO UPDATE SET 
         updated_at = excluded.updated_at,
         source = excluded.source;
     `
-    stmt, err := tx.Prepare(query)
+	stmt, err := tx.Prepare(query)
 	if err != nil {
 		return 0, err
 	}
 	defer stmt.Close()
 
 	count := 0
-	
+
 	for item := range dataStream {
 		if _, err := stmt.Exec(item.Domain, source, item.Action, importTime); err != nil {
 			log.Printf("Failed to insert %s: %v", item.Domain, err)
@@ -96,9 +132,9 @@ func (d *DomainDB) StreamSync(dataStream <-chan BlockedDomain, source string) (i
 	}
 
 	pruneQuery := `DELETE FROM rules WHERE source = ? AND updated_at != ?`
-    if _, err := tx.Exec(pruneQuery, source, importTime); err != nil {
-        return 0, err
-    }
+	if _, err := tx.Exec(pruneQuery, source, importTime); err != nil {
+		return 0, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, err
@@ -108,8 +144,8 @@ func (d *DomainDB) StreamSync(dataStream <-chan BlockedDomain, source string) (i
 	return count, nil
 }
 
-func (d *DomainDB) GetAll() ([]string, error) {
-	rows, err := d.db.Query("SELECT domain FROM rules")
+func (d *DomainDB) GetBlocklist() ([]string, error) {
+	rows, err := d.db.Query("SELECT domain FROM rules WHERE action = 'BLOCK'")
 	if err != nil {
 		return nil, err
 	}
@@ -124,4 +160,36 @@ func (d *DomainDB) GetAll() ([]string, error) {
 		domains = append(domains, domain)
 	}
 	return domains, nil
+}
+
+func (d *DomainDB) GetRule(domain string) (*BlockedDomain, error) {
+	var r BlockedDomain
+	query := "SELECT domain, action, source FROM rules WHERE domain = ?"
+	err := d.db.QueryRow(query, domain).Scan(&r.Domain, &r.Action, &r.Source)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func (d *DomainDB) InsertOrUpdate(domain string, action string, source string) error {
+	query := `
+    INSERT INTO rules (domain, action, source, created_at) 
+    VALUES (?, ?, ?, ?) 
+    ON CONFLICT(domain) DO UPDATE SET 
+        updated_at = excluded.created_at, 
+        source = excluded.source,
+        action = excluded.action;
+    `
+	stmt, err := d.db.Prepare(query)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	importTime := time.Now().Unix()
+
+	_, err = stmt.Exec(domain, action, source, importTime)
+
+	return nil
 }

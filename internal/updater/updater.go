@@ -3,69 +3,79 @@ package updater
 import (
 	"log"
 	"net/http"
+	"netguard/internal/config"
 	"netguard/internal/repository"
+	"sync"
 )
 
-const StevenBlackURL = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
+// Run now accepts []config.SourceConfig
+func Run(db *repository.DomainDB, sources []config.SourceConfig) {
+	var wg sync.WaitGroup
 
-func Update(db *repository.DomainDB) {
-	log.Println("Checking for blocklist updates...")
+	for _, src := range sources {
+		wg.Add(1)
+		// Pass the whole SourceConfig object
+		go func(s config.SourceConfig) {
+			defer wg.Done()
+			processSource(db, s)
+		}(src)
+	}
+	
+	wg.Wait()
+}
 
-	// 1. Get current version from DB
-	currentETag := db.GetETag("stevenblack")
+func processSource(db *repository.DomainDB, src config.SourceConfig) {
+	log.Printf("Checking source: %s (%s)", src.Name, src.Format)
 
-	// 2. Prepare Request with If-None-Match
+	// Use Name + URL to ensure unique ETag storage keys
+	etagKey := src.Name + "_" + src.URL
+	currentETag := db.GetETag(etagKey)
+
 	client := &http.Client{}
-	req, _ := http.NewRequest("GET", StevenBlackURL, nil)
+	req, _ := http.NewRequest("GET", src.URL, nil)
 	if currentETag != "" {
 		req.Header.Set("If-None-Match", currentETag)
 	}
 
-	// 3. Send Request
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Update check failed: %v", err)
+		log.Printf("Error fetching %s: %v", src.Name, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
-		log.Println("Blocklist is already up to date (304).")
+		log.Printf("[%s] Up to date.", src.Name)
 		return
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("Failed to download blocklist. Status: %d", resp.StatusCode)
+		log.Printf("[%s] Failed with status %d", src.Name, resp.StatusCode)
 		return
 	}
 
-	log.Println("New update found. Starting sync...")
-	newETag := resp.Header.Get("ETag")
-
+	// Prepare pipeline
 	domainChan := make(chan repository.BlockedDomain, 2000)
-
 	doneChan := make(chan int)
 
+	// DB Consumer: Note we pass src.Name here so the DB handles Mark-and-Sweep correctly
 	go func() {
-		count, err := db.StreamSync(domainChan, "stevenblack")
+		count, err := db.StreamSync(domainChan, src.Name)
 		if err != nil {
-			log.Printf("DB Sync Error: %v", err)
+			log.Printf("DB Error %s: %v", src.Name, err)
 			doneChan <- 0
 		} else {
 			doneChan <- count
 		}
 	}()
 
-	repository.ParseAndStream(resp.Body, domainChan, "stevenblack")
-
-	totalProcessed := <-doneChan
-
-	if totalProcessed > 0 {
-		log.Printf("Update complete. Active rules: %d", totalProcessed)
-		if newETag != "" {
-			db.UpdateETag("stevenblack", newETag)
-		}
-	} else {
-		log.Println("Update processed, but zero rules were added/kept. Something might be wrong.")
+	// Producer: Pass the full 'src' config so Parser knows how to read it
+	repository.ParseAndStream(resp.Body, domainChan, src)
+	
+	count := <-doneChan
+	log.Printf("[%s] Updated. %d rules active.", src.Name, count)
+	
+	if newETag := resp.Header.Get("ETag"); newETag != "" {
+		db.UpdateETag(etagKey, newETag)
 	}
 }
