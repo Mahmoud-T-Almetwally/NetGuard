@@ -1,0 +1,43 @@
+
+app:
+  # How often to check for updates (in hours)
+  update_interval_hours: 12
+  # Log level (debug, info, error)
+  log_level: "info"
+
+network:
+  # The NFQueue number (must match: sudo iptables ... --queue-num 0)
+  queue_num: 0
+  # Max packet processing buffer
+  queue_size: 1000
+
+blocking:
+  sources:
+    # Standard Hosts File (StevenBlack)
+    - name: "steven_black"
+      url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
+      format: "hosts"
+
+    - name: "urlhaus"
+      url: ""
+      format: "json"
+      target_field: "url"
+
+    # - name: "urlhaus"
+    #   url: "https://urlhaus.abuse.ch/downloads/csv_online/"
+    #   format: "csv"
+    #   target_column: "url"
+
+    # Example: A raw text file (one domain per line)
+    # - name: "simple_ad_list"
+    #   url: "https://example.com/just_domains.txt"
+    #   format: "text"
+
+  blacklist:
+    - "tiktok.com"
+  # whitelist:
+  #   - "google-analytics.com"
+
+ai:
+  enable_adware_model: true
+  enable_malware_scanner: true
