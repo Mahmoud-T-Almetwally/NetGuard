@@ -42,8 +42,15 @@ func (l* Listener) Start(ctx context.Context, e* engine.Engine, cfg nfqueue.Conf
 			}
 
 			if shouldBlock {
-				l.Nfq.SetVerdict(id, nfqueue.NfDrop)
 				log.Printf("Id: %d, Domain: %s, Length: %d, Verdict: BLOCKED", id, domain, len(payload))
+
+				go func(payload []byte) {
+					if err := SendTCPReset(payload); err != nil {
+						log.Printf("Failed to inject RST: %v", err)
+					}
+            	}(payload)
+
+				l.Nfq.SetVerdict(id, nfqueue.NfDrop)
 				return 0
 			}
 			
