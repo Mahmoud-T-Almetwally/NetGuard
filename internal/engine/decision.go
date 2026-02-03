@@ -21,6 +21,8 @@ func (e *Engine) Init(domainDB *repository.DomainDB, scanner *analysis.Scanner) 
 		return err
 	}
 
+	log.Printf("Successfully loaded %d blocked Domains", len(domains))
+
 	e.scanner = scanner
 
 	e.domainTrie = NewDomainTrie()
