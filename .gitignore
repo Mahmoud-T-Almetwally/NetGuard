@@ -28,6 +28,9 @@ go.work.sum
 .env
 env/
 
+top-1m.csv
+scripts/dataset_builder/data/*
+
 # Editor/IDE
 # .idea/
 # .vscode/
