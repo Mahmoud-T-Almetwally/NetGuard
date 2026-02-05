@@ -1,0 +1,54 @@
+# Maintainer: Mahmoud T. Almetwally mahmoudtariq@std.mans.edu.eg
+pkgname=netguard-git
+pkgver=r1.0.g1234567
+pkgrel=1
+pkgdesc="Traffic monitoring and blocking app with AI detection (NFQueue)"
+arch=('x86_64')
+url="https://github.com/Mahmoud-T-Almetwally/NetGuard"
+license=('MIT')
+depends=('glibc' 'libnetfilter_queue' 'onnxruntime' 'iptables' 'libcap')
+makedepends=('go' 'git')
+source=("git+https://github.com/Mahmoud-T-Almetwally/NetGuard.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "NetGuard"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "NetGuard"
+    mkdir -p build_bin
+    go mod download
+}
+
+build() {
+    cd "NetGuard"
+    export CGO_ENABLED=1
+    go build \
+        -trimpath \
+        -buildmode=pie \
+        -mod=readonly \
+        -ldflags "-w -s" \
+        -o build_bin/netguard cmd/netguard/main.go
+}
+
+package() {
+    cd "NetGuard"
+
+    install -Dm755 build_bin/netguard "$pkgdir/usr/bin/netguard"
+
+    install -dm750 "$pkgdir/var/lib/netguard/data/models"
+    
+    install -m644 data/models/adware_classifier.onnx "$pkgdir/var/lib/netguard/data/models/"
+    install -m644 data/models/malware_classifier.onnx "$pkgdir/var/lib/netguard/data/models/"
+    install -m644 data/models/feature_names.txt "$pkgdir/var/lib/netguard/data/models/"
+
+    install -Dm644 build/package/arch/netguard.service "$pkgdir/usr/lib/systemd/system/netguard.service"
+
+    install -Dm644 build/package/arch/netguard.sysusers "$pkgdir/usr/lib/sysusers.d/netguard.conf"
+    
+    install -Dm644 build/package/arch/netguard.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/netguard.conf"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,4 @@
+d /var/lib/netguard 0750 netguard netguard
+d /var/lib/netguard/data 0750 netguard netguard
+d /var/lib/netguard/data/models 0750 netguard netguard
+Z /var/lib/netguard - netguard netguard
