@@ -20,21 +20,38 @@ import (
 )
 
 func main() {
+	possiblePaths := []string{
+		"configs/config.yaml",              // Relative (Dev)
+		"/etc/netguard/config.yaml",        // Production (Standard)
+		"/var/lib/netguard/configs/config.yaml", // Backup location
+	}
 
-	cfg, err := config.Load("configs/config.yaml")
+	var configPath string
+	for _, p := range possiblePaths {
+		if _, err := os.Stat(p); err == nil {
+			configPath = p
+			break
+		}
+	}
+
+	if configPath == "" {
+		log.Fatalf("Failed to load config: %v", os.ErrNotExist)
+	}
+
+	log.Printf("Loading config from: %s", configPath)
+
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	log.Printf("Configuration loaded. Log Level: %s", cfg.App.LogLevel)
 
-	// 1. Initialize SQLite Database
 	db := &repository.DomainDB{}
 	if err := db.InitDB("./data/blocklist.db"); err != nil {
 		log.Fatalf("Fatal: Could not Initialize database: %v", err)
 	}
 	log.Println("Database Initialized Successfully.")
 
-	// 2. Run Updater
 	log.Println("Checking for updates...")
 	updater.Run(db, cfg.Blocking.Sources)
 	
@@ -45,7 +62,6 @@ func main() {
 		defer inference.CleanupONNX()
 	}
 
-    // 3. Create Predictor (Loads models)
     pred, err := inference.NewPredictor("./data/models")
     if err != nil {
 		log.Printf("Models not found: %v", err)
@@ -58,7 +74,6 @@ func main() {
 
 	scanner := analysis.NewScanner(db, pred)
 
-	// 4. Start Traffic Monitor
 	eng := &engine.Engine{}
 	if err := eng.Init(db, scanner); err != nil{
 		log.Fatalf("Fatal: Could not Initialize engine: %v", err)
@@ -92,7 +107,6 @@ func main() {
 	log.Println("NetGuard is running. Press CTRL+C to stop.")
 	<-sigChan
 
-	// 8. Cleanup
 	log.Println("\nReceived shutdown signal. Stopping listener...")
 	cancel() 
 	
