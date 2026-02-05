@@ -66,12 +66,9 @@ def make_request(target):
     
     start = time.time()
     result = "UNKNOWN"
-    mechanism = "NONE" # NONE, RST, TIMEOUT, HTTP
+    mechanism = "NONE"
     
     try:
-        # Timeout:
-        # 3 seconds is enough for a handshake. 
-        # If firewall drops silently, this will raise ConnectTimeout.
         resp = requests.get(url, headers=HEADERS, timeout=3)
         
         # If we reach here, the traffic PASSED.
@@ -87,7 +84,6 @@ def make_request(target):
 
     except requests.exceptions.ReadTimeout:
         # Case 2: Server accepted connection but didn't send data
-        # Rare for firewalling, usually a server issue
         duration = (time.time() - start) * 1000
         result = "BLOCKED (Read Timeout)"
         mechanism = "TIMEOUT"

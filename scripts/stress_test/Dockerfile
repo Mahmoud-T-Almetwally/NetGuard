@@ -34,6 +34,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY data/ data/
+COPY configs/ configs/
 
 # 6. Build the Binary
 RUN CGO_ENABLED=1 go build -o netguard cmd/netguard/main.go
