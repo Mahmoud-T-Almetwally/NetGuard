@@ -1,6 +1,6 @@
 # Maintainer: Mahmoud T. Almetwally mahmoudtariq@std.mans.edu.eg
 pkgname=netguard-git
-pkgver=r1.0.g1234567
+pkgver=r39.509b414
 pkgrel=1
 pkgdesc="Traffic monitoring and blocking app with AI detection (NFQueue)"
 arch=('x86_64')
@@ -43,6 +43,7 @@ package() {
     install -m644 data/models/adware_classifier.onnx "$pkgdir/var/lib/netguard/data/models/"
     install -m644 data/models/malware_classifier.onnx "$pkgdir/var/lib/netguard/data/models/"
     install -m644 data/models/feature_names.txt "$pkgdir/var/lib/netguard/data/models/"
+    install -m644 configs/config.yaml "$pkgdir/var/lib/netguard/configs/"
 
     install -Dm644 build/package/arch/netguard.service "$pkgdir/usr/lib/systemd/system/netguard.service"
 
