@@ -9,8 +9,8 @@ from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 
 # Configuration
-DATA_DIR = "../dataset_builder/data"
-MODEL_DIR = "./models"
+DATA_DIR = "./dataset_builder/data"
+MODEL_DIR = "./model_builder/models"
 FILE_EXTENDED = os.path.join(DATA_DIR, "features_dataset_with_url.csv")
 FILE_BASIC = os.path.join(DATA_DIR, "features_dataset.csv")
 
@@ -30,20 +30,17 @@ def train_and_export(X, y, model_name):
     print(f"\n{'='*10} Training {model_name} Model {'='*10}")
     
     # 1. Split Data
-    # Stratify is crucial for the class imbalance
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
     
     # 2. Train Random Forest with Class Weights
-    # "balanced_subsample" is often better than "balanced" for Random Forests 
-    # as it calculates weights for each tree's bootstrap sample.
     clf = RandomForestClassifier(
-        n_estimators=200,          # Increased trees for stability
-        max_depth=15,              # Slightly deeper for complex features
+        n_estimators=200,
+        max_depth=15,              
         class_weight="balanced_subsample", 
         random_state=42,
-        n_jobs=-1                  # Use all CPU cores
+        n_jobs=-1                  
     )
     
     clf.fit(X_train, y_train)
@@ -73,7 +70,6 @@ def train_and_export(X, y, model_name):
     print(f"Exporting to {model_name}.onnx...")
     
     # Define input type (Float tensor)
-    # The 'None' in the shape means "Any number of rows" (batch size)
     initial_type = [('float_input', FloatTensorType([None, X_train.shape[1]]))]
     
     onx = convert_sklearn(clf, initial_types=initial_type)
@@ -92,8 +88,6 @@ def main():
         return
     
     # 2. Preprocessing
-    
-    # Fill NaNs with 0 (Random Forest cannot handle NaNs)
     df.fillna(0, inplace=True)
     
     # Define Columns to explicitly ignore (Targets and IDs)
@@ -104,12 +98,9 @@ def main():
     ]
     
     # Create the Features Matrix (X)
-    # Step A: Drop known metadata/target columns
     cols_to_drop = [c for c in ignore_cols if c in df.columns]
     X_raw = df.drop(columns=cols_to_drop)
 
-    # Step B: STRICTLY select only numeric columns
-    # This removes any string columns that slipped through (like 'benign' labels)
     X = X_raw.select_dtypes(include=['number'])
 
     # Debugging: Show what we are training on
