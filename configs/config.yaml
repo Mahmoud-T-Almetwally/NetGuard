@@ -18,15 +18,15 @@ blocking:
       url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts"
       format: "hosts"
 
-    # - name: "urlhaus"
-    #   url: ""
-    #   format: "json"
-    #   target_field: "url"
-
     - name: "urlhaus"
       url: "https://raw.githubusercontent.com/Mahmoud-T-Almetwally/NetGuard/refs/heads/main/data/hosts_files/url_haus_csv_online.csv"
       format: "csv"
       target_column: "url"
+
+    # - name: "json_domains"
+    #   url: "https://example.com/domains.json"
+    #   format: "json"
+    #   target_field: "url"
 
     # Example: A raw text file (one domain per line)
     # - name: "simple_ad_list"
