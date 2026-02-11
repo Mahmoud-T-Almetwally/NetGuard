@@ -1,6 +1,6 @@
 # Maintainer: Mahmoud T. Almetwally mahmoudtariq@std.mans.edu.eg
 pkgname=netguard-git
-pkgver=r47.b3d230c
+pkgver=r48.11f4906
 pkgrel=1
 pkgdesc="Traffic monitoring and blocking app with AI detection (NFQueue)"
 arch=('x86_64')
