@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"path/filepath"
+	"os"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -20,14 +22,25 @@ type DomainDB struct {
 }
 
 func (d *DomainDB) InitDB(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("could not create directory for db: %v", err)
+	}
+
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return fmt.Errorf("could not open db: %v", err)
 	}
 
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("could not connect to db (check permissions): %v", err)
+	}
+
 	d.db = db
 
-	_, _ = d.db.Exec("PRAGMA journal_mode=WAL;")
+	if _, err := d.db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		return fmt.Errorf("failed to set WAL mode: %v", err)
+	}
 
 	q := `
 	CREATE TABLE IF NOT EXISTS rules (
@@ -71,9 +84,7 @@ func (d *DomainDB) SyncUserRules(whitelist []string, blacklist []string) error {
 	}
 	defer tx.Rollback()
 
-	// Helper to insert
 	upsert := func(domain, action string) error {
-		// We use source='user_manual' so we can protect these rows later
 		query := `
 		INSERT INTO rules (domain, source, action, batch_id) VALUES (?, 'user_manual', ?, 0)
 		ON CONFLICT(domain) DO UPDATE SET 
