@@ -20,27 +20,8 @@ import (
 )
 
 func main() {
-	possiblePaths := []string{
-		"configs/config.yaml",              // Relative (Dev)
-		"/etc/netguard/config.yaml",        // Production (Standard)
-		"/var/lib/netguard/configs/config.yaml", // Backup location
-	}
 
-	var configPath string
-	for _, p := range possiblePaths {
-		if _, err := os.Stat(p); err == nil {
-			configPath = p
-			break
-		}
-	}
-
-	if configPath == "" {
-		log.Fatalf("Failed to load config: %v", os.ErrNotExist)
-	}
-
-	log.Printf("Loading config from: %s", configPath)
-
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
